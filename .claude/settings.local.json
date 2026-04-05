@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__Claude_Preview__preview_start",
+      "Bash(npx vite:*)",
+      "Bash(npm run:*)",
+      "Bash(git -C /c/Users/diego/monapp-fitness remote -v)"
+    ]
+  }
+}
