@@ -1110,6 +1110,46 @@ function Dashboard({workouts,runs,measures,meals,tapisHistory,evals,onNav,waistG
                         </div>
                       ))}
                     </div>
+
+                    {/* Évolution allure moyenne toutes courses */}
+                    {runs.length >= 2 && (()=>{
+                      const runsWithPace=[...runs].sort((a,b)=>a.date.localeCompare(b.date))
+                        .filter(r=>r.distance&&r.duration)
+                        .map(r=>({date:fmtShort(r.date),allure:parseFloat((r.duration/r.distance).toFixed(2))}));
+                      if(runsWithPace.length<2) return null;
+                      const lastPace=runsWithPace[runsWithPace.length-1]?.allure;
+                      const prevPace=runsWithPace[runsWithPace.length-2]?.allure;
+                      const diffP=lastPace&&prevPace?lastPace-prevPace:null;
+                      return(
+                        <div style={{marginTop:12}}>
+                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+                            <div style={{fontSize:10,color:C.muted,fontFamily:"Arial"}}>ÉVOLUTION ALLURE (toutes courses)</div>
+                            {diffP!==null&&(
+                              <div style={{fontSize:11,fontWeight:700,color:diffP<0?C.green:C.red,fontFamily:"Arial"}}>
+                                {diffP<0?"↓ ":"↑ "}{Math.abs(diffP).toFixed(1)} min/km
+                              </div>
+                            )}
+                          </div>
+                          <ResponsiveContainer width="100%" height={80}>
+                            <AreaChart data={runsWithPace}>
+                              <defs>
+                                <linearGradient id="gAllure" x1="0" y1="0" x2="0" y2="1">
+                                  <stop offset="5%" stopColor={C.teal} stopOpacity={0.3}/>
+                                  <stop offset="95%" stopColor={C.teal} stopOpacity={0}/>
+                                </linearGradient>
+                              </defs>
+                              <CartesianGrid strokeDasharray="3 3" stroke={C.border}/>
+                              <XAxis dataKey="date" tick={{fill:C.muted,fontSize:8,fontFamily:"Arial"}} axisLine={false} tickLine={false}/>
+                              <YAxis reversed domain={["dataMin - 0.3","dataMax + 0.3"]} tick={{fill:C.muted,fontSize:8,fontFamily:"Arial"}} axisLine={false} tickLine={false} width={28} tickFormatter={v=>`${Math.floor(v)}'`}/>
+                              <Tooltip formatter={v=>[`${Math.floor(v)}'${Math.round((v%1)*60).toString().padStart(2,"0")}"/km`,"Allure"]}/>
+                              <ReferenceLine y={14/3} stroke={C.green} strokeDasharray="4 3" label={{value:"Obj",fill:C.green,fontSize:8}}/>
+                              <Area type="monotone" dataKey="allure" stroke={C.teal} fill="url(#gAllure)" strokeWidth={2} dot={{fill:C.teal,r:3}}/>
+                            </AreaChart>
+                          </ResponsiveContainer>
+                          <div style={{fontSize:9,color:C.muted,fontFamily:"Arial",textAlign:"center",marginTop:2}}>↑ axe inversé — plus bas = plus rapide</div>
+                        </div>
+                      );
+                    })()}
                   </>
                 ) : (
                   <div style={{fontSize:12,color:C.muted,fontFamily:"Arial",fontStyle:"italic",textAlign:"center",padding:"12px 0"}}>
@@ -1668,7 +1708,15 @@ function Seances({workouts,onSave,onSaveWellness}) {
 function Course({runs,onSave}) {
   const [view,setView]=useState("main");
   const [form,setForm]=useState({date:today(),distance:"",duration:"",type:"course à pied",notes:""});
-  const saveRun=()=>{if(!form.distance||!form.duration)return;onSave({id:Date.now(),...form,distance:parseFloat(form.distance),duration:parseFloat(form.duration)});setForm({date:today(),distance:"",duration:"",type:"course à pied",notes:""});setView("main");};
+  const saveRun=()=>{
+    if(!form.distance||!form.duration)return;
+    const dist=parseFloat(form.distance),dur=parseFloat(form.duration);
+    const vitesse=Math.round((dist/(dur/60))*10)/10;
+    const calories=Math.round(dist*70);
+    onSave({id:Date.now(),...form,distance:dist,duration:dur,vitesse,calories});
+    setForm({date:today(),distance:"",duration:"",type:"course à pied",notes:""});
+    setView("main");
+  };
   const targetPace=14/3;
   if(view==="log") return(
     <div>
@@ -1685,11 +1733,27 @@ function Course({runs,onSave}) {
         </div>
         <InputField label="DISTANCE" type="number" value={form.distance} onChange={v=>setForm({...form,distance:v})} placeholder="3.0" unit="km" color={C.blue}/>
         <InputField label="DURÉE" type="number" value={form.duration} onChange={v=>setForm({...form,duration:v})} placeholder="20" unit="min" color={C.blue}/>
-        {form.distance&&form.duration&&(
-          <Card style={{background:"#EEF1FA",border:`1px solid ${C.blue}44`,textAlign:"center",marginBottom:12}}>
-            <div style={{fontSize:32,fontWeight:700,color:C.blue,fontFamily:"Arial"}}>{fmtPace(parseFloat(form.distance),parseFloat(form.duration))}<span style={{fontSize:14}}>/km</span></div>
-          </Card>
-        )}
+        {form.distance&&form.duration&&(()=>{
+          const dist=parseFloat(form.distance),dur=parseFloat(form.duration);
+          return(
+            <Card style={{background:"#EEF1FA",border:`1px solid ${C.blue}44`,marginBottom:12}}>
+              <div style={{textAlign:"center",marginBottom:8}}>
+                <div style={{fontSize:11,color:C.muted,fontFamily:"Arial",marginBottom:2}}>ALLURE MOYENNE</div>
+                <div style={{fontSize:32,fontWeight:700,color:C.blue,fontFamily:"Arial"}}>{fmtPace(dist,dur)}<span style={{fontSize:14}}>/km</span></div>
+              </div>
+              <div style={{display:"flex",justifyContent:"space-around",borderTop:`1px solid ${C.border}`,paddingTop:8}}>
+                <div style={{textAlign:"center"}}>
+                  <div style={{fontSize:18,fontWeight:700,color:C.text,fontFamily:"Arial"}}>{(dist/(dur/60)).toFixed(1)}</div>
+                  <div style={{fontSize:10,color:C.muted,fontFamily:"Arial"}}>km/h</div>
+                </div>
+                <div style={{textAlign:"center"}}>
+                  <div style={{fontSize:18,fontWeight:700,color:C.orange,fontFamily:"Arial"}}>{Math.round(dist*70)}</div>
+                  <div style={{fontSize:10,color:C.muted,fontFamily:"Arial"}}>kcal</div>
+                </div>
+              </div>
+            </Card>
+          );
+        })()}
         <div style={{marginBottom:12}}>
           <div style={{fontSize:10,color:C.blue,marginBottom:4,fontFamily:"Arial",letterSpacing:2}}>NOTES</div>
           <textarea value={form.notes} onChange={e=>setForm({...form,notes:e.target.value})} placeholder="Ressenti, conditions..."
@@ -1703,7 +1767,7 @@ function Course({runs,onSave}) {
     <div>
       <div style={{background:C.card,padding:"16px",borderBottom:`1px solid ${C.border}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
         <div style={{fontSize:16,fontWeight:700,color:C.text,fontFamily:"Arial"}}>🏃 Course extérieure</div>
-        <Btn onClick={()=>setView("log")} color={C.blue} textColor="#fff" style={{padding:"8px 14px",fontSize:12}}>Séance libre</Btn>
+        <Btn onClick={()=>setView("log")} color={C.blue} textColor="#fff" style={{padding:"8px 14px",fontSize:12}}>+ Séance</Btn>
       </div>
       <div style={{padding:"12px 16px 80px"}}>
         <Card style={{background:"#EEF1FA",border:`1px solid ${C.blue}33`}}>
@@ -1722,7 +1786,11 @@ function Course({runs,onSave}) {
                 <div style={{fontSize:9,color:C.muted,fontFamily:"Arial"}}>/km</div>
               </div>
             </div>
-            {r.notes&&<div style={{fontSize:11,color:C.muted,fontFamily:"Arial",marginTop:6,fontStyle:"italic"}}>"{r.notes}"</div>}
+            <div style={{display:"flex",gap:12,marginTop:6}}>
+              <span style={{fontSize:11,color:C.muted,fontFamily:"Arial"}}>⚡ {r.vitesse?r.vitesse:(r.distance&&r.duration?(r.distance/(r.duration/60)).toFixed(1):"")} km/h</span>
+              <span style={{fontSize:11,color:C.orange,fontFamily:"Arial"}}>🔥 {r.calories||Math.round(r.distance*70)} kcal</span>
+            </div>
+            {r.notes&&<div style={{fontSize:11,color:C.muted,fontFamily:"Arial",marginTop:4,fontStyle:"italic"}}>"{r.notes}"</div>}
           </Card>
         ))}
         {runs.length===0&&<div style={{textAlign:"center",padding:"30px 0",color:C.muted,fontFamily:"Arial"}}><div style={{fontSize:44,marginBottom:8}}>🏃</div><div>Aucune course enregistrée</div></div>}
@@ -1780,7 +1848,7 @@ function Calendrier({workouts, runs, tapisHistory, meals, evals, measures, onSav
   // Formulaires
   const [workoutForm, setWorkoutForm] = useState({circuit:"30", exos:[]});
   const [runForm, setRunForm] = useState({distance:"", duration:"", notes:""});
-  const [tapisForm, setTapisForm] = useState({sessionId:"1", dureeReelle:"", completed:true});
+  const [tapisForm, setTapisForm] = useState({sessionId:"1", dureeReelle:"", completed:true, isLibre:false, libreDistance:"", libreDuration:"", libreNotes:""});
   const [mealForm, setMealForm] = useState({time:"12:00", type:"Déjeuner", description:""});
   const [measureForm, setMeasureForm] = useState({weight:"", waist:"", arm:"", chest:""});
   const [evalForm, setEvalForm] = useState({type:"3km", duree:"", support:"tapis", notes:""});
@@ -1869,18 +1937,33 @@ function Calendrier({workouts, runs, tapisHistory, meals, evals, measures, onSav
 
   const handleSaveTapis = async () => {
     if (!selDate) return;
-    const s = TAPIS_SESSIONS.find(s => s.id === parseInt(tapisForm.sessionId));
-    await onSaveTapis({
-      id: Date.now(), date: selDate,
-      sessionId: parseInt(tapisForm.sessionId),
-      sessionLabel: s?.label || "Séance tapis",
-      bloc: s?.bloc || 1, niveau: s?.niveau || "",
-      dureeReelle: parseFloat(tapisForm.dureeReelle) || 0,
-      completed: tapisForm.completed,
-      phases: s?.phases.length || 0
-    });
+    if (tapisForm.isLibre) {
+      if (!tapisForm.libreDistance || !tapisForm.libreDuration) return;
+      const dist=parseFloat(tapisForm.libreDistance), dur=parseFloat(tapisForm.libreDuration);
+      await onSaveTapis({
+        id: Date.now(), date: selDate,
+        sessionId: 0, sessionLabel: "Séance libre",
+        bloc: 0, niveau: "", phases: 0,
+        dureeReelle: dur, completed: true,
+        isLibre: true, distance: dist,
+        vitesse: Math.round((dist/(dur/60))*10)/10,
+        calories: Math.round(dist*70),
+        notes: tapisForm.libreNotes
+      });
+    } else {
+      const s = TAPIS_SESSIONS.find(s => s.id === parseInt(tapisForm.sessionId));
+      await onSaveTapis({
+        id: Date.now(), date: selDate,
+        sessionId: parseInt(tapisForm.sessionId),
+        sessionLabel: s?.label || "Séance tapis",
+        bloc: s?.bloc || 1, niveau: s?.niveau || "",
+        dureeReelle: parseFloat(tapisForm.dureeReelle) || 0,
+        completed: tapisForm.completed,
+        phases: s?.phases.length || 0
+      });
+    }
     setAddView(null);
-    setTapisForm({sessionId:"1", dureeReelle:"", completed:true});
+    setTapisForm({sessionId:"1", dureeReelle:"", completed:true, isLibre:false, libreDistance:"", libreDuration:"", libreNotes:""});
   };
 
   const handleSaveMeal = async () => {
@@ -1980,12 +2063,24 @@ function Calendrier({workouts, runs, tapisHistory, meals, evals, measures, onSav
             <Card>
               <SHdr color={C.teal}>⚡ TAPIS</SHdr>
               {dayActs.tapis.map((t, i) => (
-                <div key={i} style={{display:"flex", justifyContent:"space-between", alignItems:"center"}}>
-                  <div>
-                    <div style={{fontSize:14, fontWeight:700, color:C.text, fontFamily:"Arial"}}>{t.sessionLabel}</div>
-                    <div style={{fontSize:11, color:C.muted, fontFamily:"Arial"}}>{t.dureeReelle} min · Bloc {t.bloc}</div>
+                <div key={i} style={{paddingBottom: i < dayActs.tapis.length-1 ? 8 : 0, borderBottom: i < dayActs.tapis.length-1 ? `1px solid ${C.border}` : "none", marginBottom: i < dayActs.tapis.length-1 ? 8 : 0}}>
+                  <div style={{display:"flex", justifyContent:"space-between", alignItems:"center"}}>
+                    <div>
+                      <div style={{fontSize:14, fontWeight:700, color:C.text, fontFamily:"Arial"}}>{t.sessionLabel}</div>
+                      <div style={{fontSize:11, color:C.muted, fontFamily:"Arial"}}>
+                        {t.isLibre ? `${t.distance} km · ${t.dureeReelle} min` : `${t.dureeReelle} min · Bloc ${t.bloc}`}
+                      </div>
+                    </div>
+                    <Badge text={t.completed?"✓ Complète":"Partielle"} color={t.completed?C.green:C.gold}/>
                   </div>
-                  <Badge text={t.completed?"✓ Complète":"Partielle"} color={t.completed?C.green:C.gold}/>
+                  {t.isLibre && t.distance && (
+                    <div style={{display:"flex",gap:12,marginTop:4}}>
+                      <span style={{fontSize:11,color:C.teal,fontFamily:"Arial"}}>⚡ {t.vitesse} km/h</span>
+                      <span style={{fontSize:11,color:C.muted,fontFamily:"Arial"}}>· {fmtPace(t.distance,t.dureeReelle)}/km</span>
+                      <span style={{fontSize:11,color:C.orange,fontFamily:"Arial"}}>🔥 {t.calories} kcal</span>
+                    </div>
+                  )}
+                  {t.notes && <div style={{fontSize:11,color:C.muted,fontFamily:"Arial",marginTop:4,fontStyle:"italic"}}>"{t.notes}"</div>}
                 </div>
               ))}
             </Card>
@@ -2123,19 +2218,32 @@ function Calendrier({workouts, runs, tapisHistory, meals, evals, measures, onSav
 
   if (addView === "run") {
     const dayLabel = selectedDay?.toLocaleDateString("fr-FR",{weekday:"long",day:"numeric",month:"long"});
-    const pace = runForm.distance && runForm.duration ? fmtPace(parseFloat(runForm.distance), parseFloat(runForm.duration)) : null;
+    const dist = parseFloat(runForm.distance), dur = parseFloat(runForm.duration);
+    const hasData = runForm.distance && runForm.duration && !isNaN(dist) && !isNaN(dur);
     return (
       <div>
         <BackBar title={`🏃 Course — ${dayLabel}`} onBack={()=>setAddView("choose")} color={C.blue}/>
         <div style={{padding:"16px 16px 80px"}}>
           <InputField label="DISTANCE" type="number" value={runForm.distance} onChange={v=>setRunForm(f=>({...f,distance:v}))} placeholder="3.0" unit="km" color={C.blue}/>
           <InputField label="DURÉE" type="number" value={runForm.duration} onChange={v=>setRunForm(f=>({...f,duration:v}))} placeholder="20" unit="min" color={C.blue}/>
-          {pace && (
-            <Card style={{background:"#EEF1FA", border:`1px solid ${C.blue}44`, textAlign:"center", marginBottom:12}}>
-              <div style={{fontSize:11, color:C.muted, fontFamily:"Arial", marginBottom:4}}>ALLURE CALCULÉE</div>
-              <div style={{fontSize:32, fontWeight:700, color:C.blue, fontFamily:"Arial"}}>{pace}<span style={{fontSize:14}}>/km</span></div>
-              <div style={{fontSize:12, color:parseFloat(runForm.duration)/parseFloat(runForm.distance)<=14/3?C.green:C.muted, fontFamily:"Arial", marginTop:4}}>
-                {parseFloat(runForm.duration)/parseFloat(runForm.distance)<=14/3?"✅ Objectif 14 min atteint !":"Cible : 4'40\"/km"}
+          {hasData && (
+            <Card style={{background:"#EEF1FA", border:`1px solid ${C.blue}44`, marginBottom:12}}>
+              <div style={{textAlign:"center", marginBottom:8}}>
+                <div style={{fontSize:11, color:C.muted, fontFamily:"Arial", marginBottom:2}}>ALLURE MOYENNE</div>
+                <div style={{fontSize:32, fontWeight:700, color:C.blue, fontFamily:"Arial"}}>{fmtPace(dist,dur)}<span style={{fontSize:14}}>/km</span></div>
+                <div style={{fontSize:12, color:dur/dist<=14/3?C.green:C.muted, fontFamily:"Arial", marginTop:4}}>
+                  {dur/dist<=14/3?"✅ Objectif 14 min atteint !":"Cible : 4'40\"/km"}
+                </div>
+              </div>
+              <div style={{display:"flex",justifyContent:"space-around",borderTop:`1px solid ${C.border}`,paddingTop:8}}>
+                <div style={{textAlign:"center"}}>
+                  <div style={{fontSize:18,fontWeight:700,color:C.text,fontFamily:"Arial"}}>{(dist/(dur/60)).toFixed(1)}</div>
+                  <div style={{fontSize:10,color:C.muted,fontFamily:"Arial"}}>km/h</div>
+                </div>
+                <div style={{textAlign:"center"}}>
+                  <div style={{fontSize:18,fontWeight:700,color:C.orange,fontFamily:"Arial"}}>{Math.round(dist*70)}</div>
+                  <div style={{fontSize:10,color:C.muted,fontFamily:"Arial"}}>kcal</div>
+                </div>
               </div>
             </Card>
           )}
@@ -2152,40 +2260,87 @@ function Calendrier({workouts, runs, tapisHistory, meals, evals, measures, onSav
 
   if (addView === "tapis") {
     const dayLabel = selectedDay?.toLocaleDateString("fr-FR",{weekday:"long",day:"numeric",month:"long"});
+    const lDist=parseFloat(tapisForm.libreDistance),lDur=parseFloat(tapisForm.libreDuration);
+    const hasLibreData=tapisForm.libreDistance&&tapisForm.libreDuration&&!isNaN(lDist)&&!isNaN(lDur);
     return (
       <div>
         <BackBar title={`⚡ Tapis — ${dayLabel}`} onBack={()=>setAddView("choose")} color={C.teal}/>
         <div style={{padding:"16px 16px 80px"}}>
-          <SHdr color={C.teal}>SÉANCE EFFECTUÉE</SHdr>
-          {TAPIS_SESSIONS.map((s,i) => (
-            <div key={i} onClick={()=>setTapisForm(f=>({...f,sessionId:String(s.id)}))} style={{
-              background:tapisForm.sessionId===String(s.id)?`${s.color}22`:C.card,
-              borderRadius:10, padding:"14px 16px", marginBottom:8,
-              border:`1px solid ${tapisForm.sessionId===String(s.id)?s.color:C.border}`,
-              cursor:"pointer", display:"flex", justifyContent:"space-between", alignItems:"center"
-            }}>
-              <div>
-                <div style={{fontSize:14, fontWeight:700, color:C.text, fontFamily:"Arial"}}>{s.label}</div>
-                <div style={{fontSize:11, color:C.muted, fontFamily:"Arial"}}>{s.sublabel} · {s.duree}</div>
-              </div>
-              {tapisForm.sessionId===String(s.id) && <span style={{color:s.color, fontSize:20}}>✓</span>}
-            </div>
-          ))}
-          <InputField label="DURÉE RÉELLE" type="number" value={tapisForm.dureeReelle} onChange={v=>setTapisForm(f=>({...f,dureeReelle:v}))} placeholder="28" unit="min" color={C.teal}/>
-          <div style={{marginBottom:16}}>
-            <SHdr color={C.teal}>SÉANCE</SHdr>
-            <div style={{display:"flex", gap:8}}>
-              {[{v:true,l:"✅ Complète"},{v:false,l:"⚡ Partielle"}].map(opt => (
-                <button key={String(opt.v)} onClick={()=>setTapisForm(f=>({...f,completed:opt.v}))} style={{
-                  flex:1, padding:"10px", borderRadius:8,
-                  background:tapisForm.completed===opt.v?`${C.teal}22`:C.card2,
-                  border:`1px solid ${tapisForm.completed===opt.v?C.teal:"#E2E8F0"}`,
-                  color:tapisForm.completed===opt.v?C.teal:C.muted, fontSize:12, fontFamily:"Arial", cursor:"pointer"
-                }}>{opt.l}</button>
-              ))}
-            </div>
+          {/* Onglets Guidée / Libre */}
+          <div style={{display:"flex",gap:8,marginBottom:16}}>
+            {[{v:false,l:"📋 Séance guidée"},{v:true,l:"🆓 Séance libre"}].map(opt=>(
+              <button key={String(opt.v)} onClick={()=>setTapisForm(f=>({...f,isLibre:opt.v}))} style={{
+                flex:1,padding:"10px",borderRadius:10,fontFamily:"Arial",fontSize:12,fontWeight:700,cursor:"pointer",
+                background:tapisForm.isLibre===opt.v?`${C.teal}22`:C.card2,
+                border:`2px solid ${tapisForm.isLibre===opt.v?C.teal:"#E2E8F0"}`,
+                color:tapisForm.isLibre===opt.v?C.teal:C.muted
+              }}>{opt.l}</button>
+            ))}
           </div>
-          <Btn onClick={handleSaveTapis} color={C.teal} textColor={C.bg} style={{width:"100%"}}>💾 Enregistrer</Btn>
+
+          {tapisForm.isLibre ? (
+            <>
+              <InputField label="DISTANCE" type="number" value={tapisForm.libreDistance} onChange={v=>setTapisForm(f=>({...f,libreDistance:v}))} placeholder="3.0" unit="km" color={C.teal}/>
+              <InputField label="DURÉE" type="number" value={tapisForm.libreDuration} onChange={v=>setTapisForm(f=>({...f,libreDuration:v}))} placeholder="25" unit="min" color={C.teal}/>
+              {hasLibreData && (
+                <Card style={{background:`${C.teal}11`,border:`1px solid ${C.teal}44`,marginBottom:12}}>
+                  <div style={{textAlign:"center",marginBottom:8}}>
+                    <div style={{fontSize:11,color:C.muted,fontFamily:"Arial",marginBottom:2}}>ALLURE MOYENNE</div>
+                    <div style={{fontSize:28,fontWeight:700,color:C.teal,fontFamily:"Arial"}}>{fmtPace(lDist,lDur)}<span style={{fontSize:13}}>/km</span></div>
+                  </div>
+                  <div style={{display:"flex",justifyContent:"space-around",borderTop:`1px solid ${C.border}`,paddingTop:8}}>
+                    <div style={{textAlign:"center"}}>
+                      <div style={{fontSize:17,fontWeight:700,color:C.text,fontFamily:"Arial"}}>{(lDist/(lDur/60)).toFixed(1)}</div>
+                      <div style={{fontSize:10,color:C.muted,fontFamily:"Arial"}}>km/h</div>
+                    </div>
+                    <div style={{textAlign:"center"}}>
+                      <div style={{fontSize:17,fontWeight:700,color:C.orange,fontFamily:"Arial"}}>{Math.round(lDist*70)}</div>
+                      <div style={{fontSize:10,color:C.muted,fontFamily:"Arial"}}>kcal</div>
+                    </div>
+                  </div>
+                </Card>
+              )}
+              <div style={{marginBottom:12}}>
+                <div style={{fontSize:10,color:C.teal,marginBottom:4,fontFamily:"Arial",letterSpacing:2}}>NOTES</div>
+                <textarea value={tapisForm.libreNotes} onChange={e=>setTapisForm(f=>({...f,libreNotes:e.target.value}))} placeholder="Ressenti, programme suivi..."
+                  style={{width:"100%",background:C.card2,border:"1px solid #E2E8F0",borderRadius:8,color:C.text,padding:"10px 12px",fontSize:13,fontFamily:"Arial",outline:"none",minHeight:60,resize:"none",boxSizing:"border-box"}}/>
+              </div>
+              <Btn onClick={handleSaveTapis} color={C.teal} textColor={C.bg} style={{width:"100%"}} disabled={!tapisForm.libreDistance||!tapisForm.libreDuration}>💾 Enregistrer</Btn>
+            </>
+          ) : (
+            <>
+              <SHdr color={C.teal}>SÉANCE EFFECTUÉE</SHdr>
+              {TAPIS_SESSIONS.map((s,i) => (
+                <div key={i} onClick={()=>setTapisForm(f=>({...f,sessionId:String(s.id)}))} style={{
+                  background:tapisForm.sessionId===String(s.id)?`${s.color}22`:C.card,
+                  borderRadius:10, padding:"14px 16px", marginBottom:8,
+                  border:`1px solid ${tapisForm.sessionId===String(s.id)?s.color:C.border}`,
+                  cursor:"pointer", display:"flex", justifyContent:"space-between", alignItems:"center"
+                }}>
+                  <div>
+                    <div style={{fontSize:14, fontWeight:700, color:C.text, fontFamily:"Arial"}}>{s.label}</div>
+                    <div style={{fontSize:11, color:C.muted, fontFamily:"Arial"}}>{s.sublabel} · {s.duree}</div>
+                  </div>
+                  {tapisForm.sessionId===String(s.id) && <span style={{color:s.color, fontSize:20}}>✓</span>}
+                </div>
+              ))}
+              <InputField label="DURÉE RÉELLE" type="number" value={tapisForm.dureeReelle} onChange={v=>setTapisForm(f=>({...f,dureeReelle:v}))} placeholder="28" unit="min" color={C.teal}/>
+              <div style={{marginBottom:16}}>
+                <SHdr color={C.teal}>SÉANCE</SHdr>
+                <div style={{display:"flex", gap:8}}>
+                  {[{v:true,l:"✅ Complète"},{v:false,l:"⚡ Partielle"}].map(opt => (
+                    <button key={String(opt.v)} onClick={()=>setTapisForm(f=>({...f,completed:opt.v}))} style={{
+                      flex:1, padding:"10px", borderRadius:8,
+                      background:tapisForm.completed===opt.v?`${C.teal}22`:C.card2,
+                      border:`1px solid ${tapisForm.completed===opt.v?C.teal:"#E2E8F0"}`,
+                      color:tapisForm.completed===opt.v?C.teal:C.muted, fontSize:12, fontFamily:"Arial", cursor:"pointer"
+                    }}>{opt.l}</button>
+                  ))}
+                </div>
+              </div>
+              <Btn onClick={handleSaveTapis} color={C.teal} textColor={C.bg} style={{width:"100%"}}>💾 Enregistrer</Btn>
+            </>
+          )}
         </div>
       </div>
     );
