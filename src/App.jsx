@@ -55,7 +55,43 @@ async function idbSet(key, val) {
   });
 }
 
+// ── Firebase helpers (REST API — pas de SDK) ──────────
+const fbGet = () => ({
+  url: localStorage.getItem("gend_fb_url")||"",
+  key: localStorage.getItem("gend_fb_key")||""
+});
+async function firebaseLoad(key) {
+  const {url,key:k} = fbGet();
+  if(!url||!k) return null;
+  try {
+    const res = await fetch(`${url}/doudoufit/${k}/${key}.json`);
+    if(!res.ok) return null;
+    const data = await res.json();
+    return Array.isArray(data) ? data : null;
+  } catch { return null; }
+}
+async function firebaseSave(key, val) {
+  const {url,key:k} = fbGet();
+  if(!url||!k) return;
+  try {
+    await fetch(`${url}/doudoufit/${k}/${key}.json`,{
+      method:"PUT", headers:{"Content-Type":"application/json"},
+      body:JSON.stringify(val)
+    });
+  } catch {}
+}
+
 async function dbLoad(key, def) {
+  // Essai 0 : Firebase (source de vérité cross-device)
+  try {
+    const fbData = await firebaseLoad(key);
+    if (fbData !== null) {
+      // Mettre en cache local
+      idbSet(key, JSON.stringify(fbData)).catch(()=>{});
+      localStorage.setItem(key, JSON.stringify(fbData));
+      return fbData;
+    }
+  } catch {}
   // Essai 1 : IndexedDB (persistant mobile)
   try {
     const val = await idbGet(key);
@@ -71,7 +107,6 @@ async function dbLoad(key, def) {
       if (r && r.value != null) {
         const parsed = JSON.parse(r.value);
         if (Array.isArray(parsed)) {
-          // Migrer vers IndexedDB
           idbSet(key, r.value).catch(() => {});
           return parsed;
         }
@@ -84,7 +119,6 @@ async function dbLoad(key, def) {
     if (val) {
       const parsed = JSON.parse(val);
       if (Array.isArray(parsed)) {
-        // Migrer vers IndexedDB
         idbSet(key, val).catch(() => {});
         return parsed;
       }
@@ -97,22 +131,17 @@ async function dbSave(key, val) {
   const str = JSON.stringify(val);
   let saved = false;
   // Essai 1 : IndexedDB (persistant)
-  try {
-    await idbSet(key, str);
-    saved = true;
-  } catch {}
+  try { await idbSet(key, str); saved = true; } catch {}
   // Essai 2 : window.storage (webview natif)
   try {
     if (window.storage && typeof window.storage.set === "function") {
-      await window.storage.set(key, str);
-      saved = true;
+      await window.storage.set(key, str); saved = true;
     }
   } catch {}
   // Essai 3 : localStorage
-  try {
-    localStorage.setItem(key, str);
-    saved = true;
-  } catch {}
+  try { localStorage.setItem(key, str); saved = true; } catch {}
+  // Firebase (sync cross-device en arrière-plan)
+  firebaseSave(key, val);
   return saved;
 }
 
@@ -1841,7 +1870,23 @@ function Rappels({reminders,onSave,onDelete,onToggle}) {
 // ═══════════════════════════════════════════════════
 //  CALENDRIER — NAVIGATION & AJOUT SESSIONS PASSÉES
 // ═══════════════════════════════════════════════════
-function Calendrier({workouts, runs, tapisHistory, meals, evals, measures, onSaveWorkout, onSaveRun, onSaveTapis, onSaveMeal, onSaveMeasure, onSaveEval}) {
+function Calendrier({workouts, runs, tapisHistory, meals, evals, measures, onSaveWorkout, onSaveRun, onSaveTapis, onSaveMeal, onSaveMeasure, onSaveEval, onDeleteWorkout, onDeleteRun, onDeleteTapis, onDeleteEval, onDeleteMeasure, onDeleteMeal}) {
+  const [confirmDel, setConfirmDel] = useState(null); // {type, id}
+  const askDelete = (type, id) => {
+    setConfirmDel({type, id});
+    setTimeout(() => setConfirmDel(null), 4000);
+  };
+  const doDelete = () => {
+    if (!confirmDel) return;
+    const {type, id} = confirmDel;
+    if (type==="workout")  onDeleteWorkout(id);
+    if (type==="run")      onDeleteRun(id);
+    if (type==="tapis")    onDeleteTapis(id);
+    if (type==="eval")     onDeleteEval(id);
+    if (type==="measure")  onDeleteMeasure(id);
+    if (type==="meal")     onDeleteMeal(id);
+    setConfirmDel(null);
+  };
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [selectedDay, setSelectedDay] = useState(null);
   const [addView, setAddView] = useState(null); // "workout"|"run"|"tapis"|"meal"|"measure"|"eval"
@@ -2024,18 +2069,34 @@ function Calendrier({workouts, runs, tapisHistory, meals, evals, measures, onSav
             </Card>
           )}
 
+          {/* Bouton confirmation suppression */}
+          {confirmDel && (
+            <div style={{background:"#FEE2E2",border:`1px solid ${C.red}`,borderRadius:10,padding:"10px 14px",marginBottom:8,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <span style={{fontSize:13,color:C.red,fontFamily:"Arial",fontWeight:700}}>⚠️ Supprimer cette entrée ?</span>
+              <div style={{display:"flex",gap:8}}>
+                <button onClick={()=>setConfirmDel(null)} style={{padding:"6px 12px",borderRadius:8,background:C.card2,border:"none",fontSize:12,fontFamily:"Arial",cursor:"pointer",color:C.muted}}>Annuler</button>
+                <button onClick={doDelete} style={{padding:"6px 12px",borderRadius:8,background:C.red,border:"none",fontSize:12,fontFamily:"Arial",cursor:"pointer",color:"#fff",fontWeight:700}}>Supprimer</button>
+              </div>
+            </div>
+          )}
+
           {/* Séances muscu */}
           {dayActs.workouts.length > 0 && (
             <Card>
               <SHdr color={C.gold}>💪 MUSCU</SHdr>
               {dayActs.workouts.map((w, i) => (
                 <div key={i} style={{paddingBottom: i < dayActs.workouts.length-1 ? 8 : 0, marginBottom: i < dayActs.workouts.length-1 ? 8 : 0, borderBottom: i < dayActs.workouts.length-1 ? `1px solid ${C.border}` : "none"}}>
-                  <div style={{fontSize:14, fontWeight:700, color:C.text, fontFamily:"Arial"}}>{w.type}</div>
-                  {w.exercises?.map((ex, ei) => (
-                    <div key={ei} style={{fontSize:11, color:C.muted, fontFamily:"Arial", marginTop:3}}>
-                      › {ex.name} — {ex.sets?.filter(s=>s.reps).map((s,si)=>`${s.reps}reps${s.weight?`×${s.weight}kg`:""}`).join(", ")||"—"}
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+                    <div style={{flex:1}}>
+                      <div style={{fontSize:14, fontWeight:700, color:C.text, fontFamily:"Arial"}}>{w.type}</div>
+                      {w.exercises?.map((ex, ei) => (
+                        <div key={ei} style={{fontSize:11, color:C.muted, fontFamily:"Arial", marginTop:3}}>
+                          › {ex.name} — {ex.sets?.filter(s=>s.reps).map((s,si)=>`${s.reps}reps${s.weight?`×${s.weight}kg`:""}`).join(", ")||"—"}
+                        </div>
+                      ))}
                     </div>
-                  ))}
+                    <button onClick={()=>askDelete("workout",w.id)} style={{background:"none",border:"none",fontSize:16,cursor:"pointer",color:confirmDel?.id===w.id?C.red:C.muted,padding:"2px 6px"}}>🗑️</button>
+                  </div>
                 </div>
               ))}
             </Card>
@@ -2046,13 +2107,15 @@ function Calendrier({workouts, runs, tapisHistory, meals, evals, measures, onSav
             <Card>
               <SHdr color={C.blue}>🏃 COURSE EXTÉRIEURE</SHdr>
               {dayActs.runs.map((r, i) => (
-                <div key={i} style={{display:"flex", justifyContent:"space-between", alignItems:"center", paddingBottom: i < dayActs.runs.length-1 ? 8 : 0}}>
-                  <div>
-                    <div style={{fontSize:14, fontWeight:700, color:C.text, fontFamily:"Arial"}}>{r.distance} km · {r.duration} min</div>
-                    <div style={{fontSize:11, color:C.muted, fontFamily:"Arial"}}>Allure : {fmtPace(r.distance, r.duration)}/km</div>
-                    {r.notes && <div style={{fontSize:11, color:C.muted, fontFamily:"Arial", fontStyle:"italic"}}>"{r.notes}"</div>}
+                <div key={i} style={{paddingBottom: i < dayActs.runs.length-1 ? 8 : 0, marginBottom: i < dayActs.runs.length-1 ? 8 : 0, borderBottom: i < dayActs.runs.length-1 ? `1px solid ${C.border}` : "none"}}>
+                  <div style={{display:"flex", justifyContent:"space-between", alignItems:"flex-start"}}>
+                    <div style={{flex:1}}>
+                      <div style={{fontSize:14, fontWeight:700, color:C.text, fontFamily:"Arial"}}>{r.distance} km · {r.duration} min</div>
+                      <div style={{fontSize:11, color:C.muted, fontFamily:"Arial"}}>Allure : {fmtPace(r.distance, r.duration)}/km</div>
+                      {r.notes && <div style={{fontSize:11, color:C.muted, fontFamily:"Arial", fontStyle:"italic"}}>"{r.notes}"</div>}
+                    </div>
+                    <button onClick={()=>askDelete("run",r.id)} style={{background:"none",border:"none",fontSize:16,cursor:"pointer",color:confirmDel?.id===r.id?C.red:C.muted,padding:"2px 6px"}}>🗑️</button>
                   </div>
-                  <Badge text={r.duration/r.distance <= 14/3 ? "✅ Objectif" : fmtPace(r.distance,r.duration)+"/km"} color={r.duration/r.distance<=14/3?C.green:C.blue}/>
                 </div>
               ))}
             </Card>
@@ -2064,23 +2127,23 @@ function Calendrier({workouts, runs, tapisHistory, meals, evals, measures, onSav
               <SHdr color={C.teal}>⚡ TAPIS</SHdr>
               {dayActs.tapis.map((t, i) => (
                 <div key={i} style={{paddingBottom: i < dayActs.tapis.length-1 ? 8 : 0, borderBottom: i < dayActs.tapis.length-1 ? `1px solid ${C.border}` : "none", marginBottom: i < dayActs.tapis.length-1 ? 8 : 0}}>
-                  <div style={{display:"flex", justifyContent:"space-between", alignItems:"center"}}>
-                    <div>
+                  <div style={{display:"flex", justifyContent:"space-between", alignItems:"flex-start"}}>
+                    <div style={{flex:1}}>
                       <div style={{fontSize:14, fontWeight:700, color:C.text, fontFamily:"Arial"}}>{t.sessionLabel}</div>
                       <div style={{fontSize:11, color:C.muted, fontFamily:"Arial"}}>
                         {t.isLibre ? `${t.distance} km · ${t.dureeReelle} min` : `${t.dureeReelle} min · Bloc ${t.bloc}`}
                       </div>
+                      {t.isLibre && t.distance && (
+                        <div style={{display:"flex",gap:12,marginTop:4}}>
+                          <span style={{fontSize:11,color:C.teal,fontFamily:"Arial"}}>⚡ {t.vitesse} km/h</span>
+                          <span style={{fontSize:11,color:C.muted,fontFamily:"Arial"}}>· {fmtPace(t.distance,t.dureeReelle)}/km</span>
+                          <span style={{fontSize:11,color:C.orange,fontFamily:"Arial"}}>🔥 {t.calories} kcal</span>
+                        </div>
+                      )}
+                      {t.notes && <div style={{fontSize:11,color:C.muted,fontFamily:"Arial",marginTop:4,fontStyle:"italic"}}>"{t.notes}"</div>}
                     </div>
-                    <Badge text={t.completed?"✓ Complète":"Partielle"} color={t.completed?C.green:C.gold}/>
+                    <button onClick={()=>askDelete("tapis",t.id)} style={{background:"none",border:"none",fontSize:16,cursor:"pointer",color:confirmDel?.id===t.id?C.red:C.muted,padding:"2px 6px"}}>🗑️</button>
                   </div>
-                  {t.isLibre && t.distance && (
-                    <div style={{display:"flex",gap:12,marginTop:4}}>
-                      <span style={{fontSize:11,color:C.teal,fontFamily:"Arial"}}>⚡ {t.vitesse} km/h</span>
-                      <span style={{fontSize:11,color:C.muted,fontFamily:"Arial"}}>· {fmtPace(t.distance,t.dureeReelle)}/km</span>
-                      <span style={{fontSize:11,color:C.orange,fontFamily:"Arial"}}>🔥 {t.calories} kcal</span>
-                    </div>
-                  )}
-                  {t.notes && <div style={{fontSize:11,color:C.muted,fontFamily:"Arial",marginTop:4,fontStyle:"italic"}}>"{t.notes}"</div>}
                 </div>
               ))}
             </Card>
@@ -2091,12 +2154,12 @@ function Calendrier({workouts, runs, tapisHistory, meals, evals, measures, onSav
             <Card>
               <SHdr color={C.orange}>🏆 TESTS</SHdr>
               {dayActs.evals.map((e, i) => (
-                <div key={i} style={{display:"flex", justifyContent:"space-between", alignItems:"center"}}>
-                  <div>
+                <div key={i} style={{display:"flex", justifyContent:"space-between", alignItems:"center", paddingBottom: i < dayActs.evals.length-1 ? 8 : 0, marginBottom: i < dayActs.evals.length-1 ? 8 : 0, borderBottom: i < dayActs.evals.length-1 ? `1px solid ${C.border}` : "none"}}>
+                  <div style={{flex:1}}>
                     <div style={{fontSize:14, fontWeight:700, color:C.text, fontFamily:"Arial"}}>{e.label}</div>
                     <div style={{fontSize:11, color:C.muted, fontFamily:"Arial"}}>{fmtDuration(e.duree)} · {e.support}</div>
                   </div>
-                  <Badge text={e.reussi?"✅ Objectif !":"En cours"} color={e.reussi?C.green:C.orange}/>
+                  <button onClick={()=>askDelete("eval",e.id)} style={{background:"none",border:"none",fontSize:16,cursor:"pointer",color:confirmDel?.id===e.id?C.red:C.muted,padding:"2px 6px"}}>🗑️</button>
                 </div>
               ))}
             </Card>
@@ -2107,11 +2170,14 @@ function Calendrier({workouts, runs, tapisHistory, meals, evals, measures, onSav
             <Card>
               <SHdr color={C.purple}>📏 MENSURATIONS</SHdr>
               {dayActs.measures.map((m, i) => (
-                <div key={i} style={{display:"flex", gap:12, flexWrap:"wrap"}}>
-                  {m.weight && <span style={{fontSize:13, color:C.text, fontFamily:"Arial"}}>⚖️ {m.weight} kg</span>}
-                  {m.waist  && <span style={{fontSize:13, color:C.gold, fontFamily:"Arial"}}>🔵 {m.waist} cm</span>}
-                  {m.arm    && <span style={{fontSize:13, color:C.green, fontFamily:"Arial"}}>💪 {m.arm} cm</span>}
-                  {m.chest  && <span style={{fontSize:13, color:C.blue, fontFamily:"Arial"}}>🫁 {m.chest} cm</span>}
+                <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center", paddingBottom: i < dayActs.measures.length-1 ? 8 : 0, marginBottom: i < dayActs.measures.length-1 ? 8 : 0, borderBottom: i < dayActs.measures.length-1 ? `1px solid ${C.border}` : "none"}}>
+                  <div style={{display:"flex", gap:12, flexWrap:"wrap", flex:1}}>
+                    {m.weight && <span style={{fontSize:13, color:C.text, fontFamily:"Arial"}}>⚖️ {m.weight} kg</span>}
+                    {m.waist  && <span style={{fontSize:13, color:C.gold, fontFamily:"Arial"}}>🔵 {m.waist} cm</span>}
+                    {m.arm    && <span style={{fontSize:13, color:C.green, fontFamily:"Arial"}}>💪 {m.arm} cm</span>}
+                    {m.chest  && <span style={{fontSize:13, color:C.blue, fontFamily:"Arial"}}>🫁 {m.chest} cm</span>}
+                  </div>
+                  <button onClick={()=>askDelete("measure",m.id)} style={{background:"none",border:"none",fontSize:16,cursor:"pointer",color:confirmDel?.id===m.id?C.red:C.muted,padding:"2px 6px"}}>🗑️</button>
                 </div>
               ))}
             </Card>
@@ -2122,12 +2188,13 @@ function Calendrier({workouts, runs, tapisHistory, meals, evals, measures, onSav
             <Card>
               <SHdr color={C.green}>🍳 REPAS</SHdr>
               {dayActs.meals.sort((a,b)=>a.time.localeCompare(b.time)).map((m, i) => (
-                <div key={i} style={{display:"flex", gap:12, padding:"6px 0", borderBottom: i < dayActs.meals.length-1 ? `1px solid ${C.border}` : "none"}}>
+                <div key={i} style={{display:"flex", gap:12, padding:"6px 0", borderBottom: i < dayActs.meals.length-1 ? `1px solid ${C.border}` : "none", alignItems:"center"}}>
                   <div style={{minWidth:50, textAlign:"center"}}>
                     <div style={{fontSize:11, color:C.gold, fontFamily:"Arial", fontWeight:700}}>{m.time}</div>
                     <div style={{fontSize:9, color:C.muted, fontFamily:"Arial"}}>{m.type}</div>
                   </div>
-                  <div style={{fontSize:13, color:C.text, fontFamily:"Arial", lineHeight:1.4}}>{m.description}</div>
+                  <div style={{fontSize:13, color:C.text, fontFamily:"Arial", lineHeight:1.4, flex:1}}>{m.description}</div>
+                  <button onClick={()=>askDelete("meal",m.id)} style={{background:"none",border:"none",fontSize:16,cursor:"pointer",color:confirmDel?.id===m.id?C.red:C.muted,padding:"2px 6px"}}>🗑️</button>
                 </div>
               ))}
             </Card>
@@ -2577,15 +2644,40 @@ function Calendrier({workouts, runs, tapisHistory, meals, evals, measures, onSav
 function Donnees({workouts,runs,measures,meals,reminders,tapisHistory,evals,onImport}) {
   const [importStatus, setImportStatus] = useState(null);
   const [storageInfo, setStorageInfo] = useState(null);
+  const [fbUrl, setFbUrl] = useState(()=>localStorage.getItem("gend_fb_url")||"");
+  const [fbKey, setFbKey] = useState(()=>localStorage.getItem("gend_fb_key")||"");
+  const [fbStatus, setFbStatus] = useState("");
+  const [fbTesting, setFbTesting] = useState(false);
 
   useEffect(() => {
-    // Vérifier l'espace disponible
     if(navigator.storage && navigator.storage.estimate) {
       navigator.storage.estimate().then(({usage, quota}) => {
         setStorageInfo({used: Math.round(usage/1024), total: Math.round(quota/1024/1024)});
       }).catch(() => {});
     }
   }, []);
+
+  const saveFbConfig = () => {
+    localStorage.setItem("gend_fb_url", fbUrl.trim());
+    localStorage.setItem("gend_fb_key", fbKey.trim());
+    setFbStatus("✅ Config sauvegardée — rechargez l'app pour activer la sync");
+    setTimeout(()=>setFbStatus(""),4000);
+  };
+
+  const testFbConnection = async () => {
+    setFbTesting(true); setFbStatus("");
+    try {
+      const res = await fetch(`${fbUrl.trim()}/doudoufit/${fbKey.trim()}/ping.json`,{
+        method:"PUT", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ok:true})
+      });
+      if(res.ok) setFbStatus("✅ Connexion Firebase OK !");
+      else setFbStatus("❌ Erreur : vérifiez l'URL et les règles Firebase");
+    } catch { setFbStatus("❌ Impossible de joindre Firebase — vérifiez l'URL"); }
+    setFbTesting(false);
+    setTimeout(()=>setFbStatus(""),5000);
+  };
+
+  const isFbConfigured = fbUrl && fbKey;
 
   const allData = {workouts, runs, measures, meals, reminders, tapisHistory, evals,
     exportedAt: new Date().toISOString(), version: "2"};
@@ -2687,24 +2779,73 @@ function Donnees({workouts,runs,measures,meals,reminders,tapisHistory,evals,onIm
           </label>
         </Card>
 
-        {/* Comment synchroniser */}
-        <Card style={{background:"#EEF1FA",border:`1px solid ${C.blue}22`}}>
-          <SHdr color={C.blue}>💡 COMMENT SYNCHRONISER ENTRE APPAREILS</SHdr>
-          <div style={{fontSize:12,color:"#3B82F6",fontFamily:"Arial",lineHeight:2}}>
-            1. Sur l'appareil A → <strong style={{color:C.text}}>Exporter</strong> le fichier<br/>
-            2. Envoie-le par <strong style={{color:C.text}}>WhatsApp, Mail ou Drive</strong><br/>
-            3. Sur l'appareil B → <strong style={{color:C.text}}>Importer</strong> le fichier reçu<br/>
-            <span style={{fontSize:10,color:C.muted}}>Sync automatique possible avec un backend — contacte le dev.</span>
+        {/* Firebase Sync */}
+        <Card style={{border:`1px solid ${C.purple}33`}}>
+          <SHdr color={C.purple}>🔄 SYNCHRONISATION AUTOMATIQUE</SHdr>
+          <div style={{fontSize:12,color:C.text,fontFamily:"Arial",marginBottom:12,lineHeight:1.6}}>
+            Connecte un compte Firebase gratuit pour synchroniser automatiquement tes données entre tous tes appareils.
+          </div>
+
+          {/* État actuel */}
+          <div style={{background:isFbConfigured?`${C.green}11`:`${C.red}11`,border:`1px solid ${isFbConfigured?C.green:C.muted}44`,borderRadius:8,padding:"8px 12px",marginBottom:12,display:"flex",alignItems:"center",gap:8}}>
+            <span style={{fontSize:16}}>{isFbConfigured?"🟢":"🔴"}</span>
+            <span style={{fontSize:12,fontFamily:"Arial",color:isFbConfigured?C.green:C.muted}}>
+              {isFbConfigured?"Sync Firebase activée":"Sync désactivée — configurer ci-dessous"}
+            </span>
+          </div>
+
+          {/* URL Firebase */}
+          <div style={{marginBottom:10}}>
+            <div style={{fontSize:10,color:C.purple,marginBottom:4,fontFamily:"Arial",letterSpacing:2}}>URL FIREBASE DATABASE</div>
+            <input value={fbUrl} onChange={e=>setFbUrl(e.target.value)}
+              placeholder="https://ton-projet-default-rtdb.firebaseio.com"
+              style={{width:"100%",background:C.card2,border:"1px solid #E2E8F0",borderRadius:8,color:C.text,padding:"10px 12px",fontSize:12,fontFamily:"Arial",outline:"none",boxSizing:"border-box"}}/>
+          </div>
+
+          {/* Code sync */}
+          <div style={{marginBottom:12}}>
+            <div style={{fontSize:10,color:C.purple,marginBottom:4,fontFamily:"Arial",letterSpacing:2}}>TON CODE DE SYNC (identique sur tous tes appareils)</div>
+            <input value={fbKey} onChange={e=>setFbKey(e.target.value)}
+              placeholder="ex: doudou2025"
+              style={{width:"100%",background:C.card2,border:"1px solid #E2E8F0",borderRadius:8,color:C.text,padding:"10px 12px",fontSize:13,fontFamily:"Arial",outline:"none",boxSizing:"border-box"}}/>
+            <div style={{fontSize:10,color:C.muted,fontFamily:"Arial",marginTop:4}}>⚠️ Utilise le même code sur tous tes appareils</div>
+          </div>
+
+          {fbStatus && <div style={{background:fbStatus.startsWith("✅")?"#DCFCE7":"#FEE2E2",border:`1px solid ${fbStatus.startsWith("✅")?C.green:C.red}44`,borderRadius:8,padding:"8px 12px",marginBottom:12,fontSize:12,color:fbStatus.startsWith("✅")?C.green:C.red,fontFamily:"Arial"}}>{fbStatus}</div>}
+
+          <div style={{display:"flex",gap:8}}>
+            <Btn onClick={testFbConnection} color={C.muted} textColor={C.bg} style={{flex:1,fontSize:12}} disabled={!fbUrl||!fbKey||fbTesting}>
+              {fbTesting?"⏳ Test...":"🔌 Tester"}
+            </Btn>
+            <Btn onClick={saveFbConfig} color={C.purple} textColor="#fff" style={{flex:2,fontSize:12}} disabled={!fbUrl||!fbKey}>
+              💾 Sauvegarder
+            </Btn>
+          </div>
+
+          {/* Guide */}
+          <div style={{marginTop:14,background:C.card2,borderRadius:8,padding:"10px 12px"}}>
+            <div style={{fontSize:11,fontWeight:700,color:C.text,fontFamily:"Arial",marginBottom:6}}>📋 Comment configurer Firebase (gratuit) :</div>
+            {["Va sur console.firebase.google.com",
+              "Crée un projet (bouton +)",
+              "Dans le menu, clique Realtime Database → Créer",
+              "Choisis \"Démarrer en mode test\"",
+              "Copie l'URL (ex: https://mon-projet-rtdb.firebaseio.com)",
+              "Colle l'URL ci-dessus, choisis un code de sync"
+            ].map((step,i)=>(
+              <div key={i} style={{fontSize:11,color:C.muted,fontFamily:"Arial",marginBottom:3}}>
+                <span style={{color:C.purple,fontWeight:700}}>{i+1}.</span> {step}
+              </div>
+            ))}
           </div>
         </Card>
 
         {/* Stockage utilisé */}
         <Card style={{background:"#DCFCE7",border:`1px solid ${C.green}22`}}>
-          <SHdr color={C.green}>💾 STOCKAGE</SHdr>
+          <SHdr color={C.green}>💾 STOCKAGE LOCAL</SHdr>
           <div style={{fontSize:12,color:C.muted,fontFamily:"Arial",lineHeight:1.8}}>
             ✅ <strong style={{color:C.green}}>IndexedDB</strong> — persistant même après fermeture<br/>
             ✅ <strong style={{color:C.green}}>localStorage</strong> — copie de secours<br/>
-            <span style={{fontSize:10,color:C.muted}}>Tes données restent sur ton appareil.</span>
+            {isFbConfigured&&<>✅ <strong style={{color:C.purple}}>Firebase</strong> — sync cross-device activée</>}
           </div>
         </Card>
       </div>
@@ -2790,8 +2931,14 @@ export default function App() {
   const saveEval     = async (e) => withSave(setEvals,     KEYS.evals,     [...evals, e]);
   const saveWellness = async (w) => withSave(setWellness,  KEYS.wellness,  [...wellness, w]);
 
-  const deleteReminder = async (id) => withSave(setReminders, KEYS.reminders, reminders.filter(r=>r.id!==id));
-  const toggleReminder = async (id) => withSave(setReminders, KEYS.reminders, reminders.map(r=>r.id===id?{...r,active:!r.active}:r));
+  const deleteReminder  = async (id) => withSave(setReminders,    KEYS.reminders, reminders.filter(r=>r.id!==id));
+  const toggleReminder  = async (id) => withSave(setReminders,    KEYS.reminders, reminders.map(r=>r.id===id?{...r,active:!r.active}:r));
+  const deleteWorkout   = async (id) => withSave(setWorkouts,     KEYS.workouts,  workouts.filter(w=>w.id!==id));
+  const deleteRun       = async (id) => withSave(setRuns,         KEYS.runs,      runs.filter(r=>r.id!==id));
+  const deleteMeasure   = async (id) => withSave(setMeasures,     KEYS.measures,  measures.filter(m=>m.id!==id));
+  const deleteTapis     = async (id) => withSave(setTapisHistory, KEYS.tapis,     tapisHistory.filter(t=>t.id!==id));
+  const deleteEval      = async (id) => withSave(setEvals,        KEYS.evals,     evals.filter(e=>e.id!==id));
+  const deleteMeal      = async (id) => withSave(setMeals,        KEYS.meals,     meals.filter(m=>m.id!==id));
 
   const handleImport = async (data) => {
     const w  = Array.isArray(data.workouts)    ? data.workouts    : workouts;
@@ -2847,7 +2994,7 @@ export default function App() {
         {screen==="mesures"   && <Mesures measures={measures} onSave={saveMeasure}/>}
         {screen==="repas"     && <Repas meals={meals} onSave={saveMeal}/>}
         {screen==="rappels"   && <Rappels reminders={reminders} onSave={saveReminder} onDelete={deleteReminder} onToggle={toggleReminder}/>}
-        {screen==="calendrier" && <Calendrier workouts={workouts} runs={runs} tapisHistory={tapisHistory} meals={meals} evals={evals} measures={measures} onSaveWorkout={saveWorkout} onSaveRun={saveRun} onSaveTapis={saveTapis} onSaveMeal={saveMeal} onSaveMeasure={saveMeasure} onSaveEval={saveEval}/>}
+        {screen==="calendrier" && <Calendrier workouts={workouts} runs={runs} tapisHistory={tapisHistory} meals={meals} evals={evals} measures={measures} onSaveWorkout={saveWorkout} onSaveRun={saveRun} onSaveTapis={saveTapis} onSaveMeal={saveMeal} onSaveMeasure={saveMeasure} onSaveEval={saveEval} onDeleteWorkout={deleteWorkout} onDeleteRun={deleteRun} onDeleteTapis={deleteTapis} onDeleteEval={deleteEval} onDeleteMeasure={deleteMeasure} onDeleteMeal={deleteMeal}/>}
         {screen==="donnees"    && <Donnees workouts={workouts} runs={runs} measures={measures} meals={meals} reminders={reminders} tapisHistory={tapisHistory} evals={evals} onImport={handleImport}/>}
       </div>	
            {/* Barre navigation */}
